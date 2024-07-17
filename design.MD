@@ -21,27 +21,56 @@ This module collects the data required from Alpha Vantage to get weekly stock ma
 
 ## money_manager.py
 This module contains the class that manages the money. Attributes are:
+
 investments - a dictionary of Investment objects
+
 schedule - a list of investment activities to make
+
 activity_lst - a list of all transactions (various function calls) performed
+
 and methods are:
+
 return_current_financial_state - a function that returns a summary of the financial state
+
 transfer_cash - a function that moves money from outside the investment to VMFXX. Parameters are time, amount, and into
+
 buy_ticket - a function that moves money from VMFXX to a specific ticket. Parameters are quantity, date, and ticket
+
 sell_ticket - a function that moves money from a specific ticket to VMFXX. Parameters are quantity, date and ticket
 
 ## investment.py
 This module contains the class that contains each individual investment. Attributes are:
+
 ticker - a string of the ticker symbol
+
 history - a dataframe with fields of date, ticker price, per_stock_return, purchase_amt, sell_amt, total_divident, total_owned, total_value
+
 divisible - a boolean indicating if the ticket can only be purchased for in integer amounts or not. Defaults to True
+
 and methods are:
+
 calc_amt_from_ticket - a function that calculates the amount of dollars for a number of tickets. Parameters are number and the output is dollars
+
 calc_ticket_from_amt - a function that calculates the amount of stock from a dollar amount put in. Parameters are dollars and output is number
+
 recalc_investment - a function that recalculates the total_dividend, total_owned, and total_value columns of the history dataframe given the investments made
+
 buy_investment - a function that adds to the purchase_amt field of the history dataframe and runs recalc_investment. Parameters are dollars, date, and req_integer
+
 sell_investment - a function that adds to the sell_amt field of the history dataframe and runs recalc_investment. Parameters are qty, date, and req_integer
 
 ## schedule.py
 This module contains the Schedule class, which provides the information on what the schedule of purchases, sales, and investments will be for a particular investment strategy. Attributes are:
-history - a dataframe of date, activity_type, from, to, amount. Where activity_type can be one of '
+
+history - a dataframe of date, activity_type, from, to, amount. Where activity_type can be one of 'buy/sell' or 'invest'. If 'invest', then from is blank. If 'buy/sell' then it goes from one ticket to another
+
+and methods are:
+
+automate_investment_scheudle - this method automates adding investment values on a regular schedule. Parameters are start, freq, and amount
+
+auto_buy_basic - this method automates purchasing investments - it will look at making purchase orders immediately after each investment to get the money into various tickers. Parameters are ticket_lookup, which is a dictionary with ticket as key, and fraction of available investment to invest in it as value
+
+auto_buy_balanced - this method automates purchasing investments, trying to balance specific strategies. It will make purchase orders immediately after each investment to balance the portfolio according to a specific strategy. Parameters are ticket_lookup, which is a dictionary with ticket as key, and desired portfolio fraction as value
+
+
+
