@@ -5,6 +5,7 @@ __pycache__/
 
 # Ignore Emacs backup files
 \#*#
+*\~
 
 # C extensions
 *.so
