@@ -55,9 +55,11 @@ calc_ticket_from_amt - a function that calculates the amount of stock from a dol
 
 recalc_investment - a function that recalculates the total_dividend, total_owned, and total_value columns of the history dataframe given the investments made
 
-buy_investment - a function that adds to the purchase_amt field of the history dataframe and runs recalc_investment. Parameters are dollars, date, and req_integer
+buy_investment - a function that adds to the purchase_amt field of the history dataframe and runs recalc_investment. Parameters are dollars, date, req_integer, and from
 
 sell_investment - a function that adds to the sell_amt field of the history dataframe and runs recalc_investment. Parameters are qty, date, and req_integer
+
+get_funds_available - a function that returns the amount available for withdrawl, given the history of the ticket, at a given point in time. This function must be future proof - i.e. if a withdrawl will occur later, it cannot provide money to remove
 
 ## schedule.py
 This module contains the Schedule class, which provides the information on what the schedule of purchases, sales, and investments will be for a particular investment strategy. Attributes are:
@@ -72,5 +74,5 @@ auto_buy_basic - this method automates purchasing investments - it will look at 
 
 auto_buy_balanced - this method automates purchasing investments, trying to balance specific strategies. It will make purchase orders immediately after each investment to balance the portfolio according to a specific strategy. Parameters are ticket_lookup, which is a dictionary with ticket as key, and desired portfolio fraction as value
 
-
+add_transaction - this method adds a transaction to the history. If no history is provided, then it adds it to the history attribute
 
