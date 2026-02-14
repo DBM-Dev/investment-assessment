@@ -7,6 +7,8 @@ Provides a web UI for all operations described in the project README:
 4. Manage and execute a portfolio
 5. Generate financial summary reports and strategy comparisons
 6. Visualize portfolio value over time
+7. Strategy Wizard – one-page strategy comparison
+8. Parameter Sweep – sensitivity analysis
 """
 
 import streamlit as st
@@ -14,13 +16,24 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import os
+import json
 import logging
 import tempfile
+import copy
 
 from src.investment import Investment, CDInvestment
 from src.money_manager import MoneyManager
 from src.schedule import Schedule
 from src.reporting import financial_summary, format_summary, compare_strategies, format_comparison
+from src.strategy_templates import (
+    STRATEGY_TEMPLATES,
+    get_compatible_templates,
+    save_strategy_config,
+    load_strategy_config,
+    list_saved_strategies,
+    delete_saved_strategy,
+    build_and_run_strategy,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -40,6 +53,100 @@ def _init_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def _build_portfolio_chart(managers_dict):
+    """Build a Plotly figure showing portfolio value, principal, and gains
+    over time for one or more MoneyManager instances.
+
+    INPUTS:
+    managers_dict - dict of {label: MoneyManager}
+
+    OUTPUTS:
+    plotly Figure"""
+    fig = go.Figure()
+
+    for mgr_name, mm in managers_dict.items():
+        all_dates = set()
+        for inv in mm.investments.values():
+            if not inv.history.empty and "date" in inv.history.columns:
+                all_dates.update(inv.history["date"].tolist())
+
+        if not all_dates:
+            continue
+
+        sorted_dates = sorted(all_dates)
+        total_values = []
+        total_invested = []
+
+        for d in sorted_dates:
+            tv = 0.0
+            ti = 0.0
+            for inv in mm.investments.values():
+                try:
+                    idx = inv._get_row_index(d)
+                    tv += inv.history.at[idx, "total_value"]
+                    ti += inv.history.loc[:idx, "purchase_amt"].sum()
+                except (ValueError, KeyError):
+                    pass
+            total_values.append(tv)
+            total_invested.append(ti)
+
+        fig.add_trace(go.Scatter(
+            x=sorted_dates, y=total_values,
+            mode="lines", name=f"{mgr_name} - Total Value",
+            line=dict(width=2),
+        ))
+        fig.add_trace(go.Scatter(
+            x=sorted_dates, y=total_invested,
+            mode="lines", name=f"{mgr_name} - Principal",
+            line=dict(width=1, dash="dash"),
+        ))
+        gains = [v - p for v, p in zip(total_values, total_invested)]
+        fig.add_trace(go.Scatter(
+            x=sorted_dates, y=gains,
+            mode="lines", name=f"{mgr_name} - Unrealized Gain/Loss",
+            line=dict(width=1, dash="dot"),
+        ))
+
+    fig.update_layout(
+        title="Portfolio Performance Over Time",
+        xaxis_title="Date",
+        yaxis_title="Value ($)",
+        yaxis_tickformat="$,.0f",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=500,
+        hovermode="x unified",
+    )
+    return fig
+
+
+def _export_section(dataframe=None, text_report=None, json_data=None, prefix="export"):
+    """Render download buttons for various export formats."""
+    cols = st.columns(3)
+    if dataframe is not None:
+        with cols[0]:
+            csv = dataframe.to_csv(index=False)
+            st.download_button(
+                "Download CSV", csv, f"{prefix}.csv", "text/csv",
+                key=f"dl_{prefix}_csv",
+            )
+    if text_report is not None:
+        with cols[1]:
+            st.download_button(
+                "Download Report (TXT)", text_report, f"{prefix}.txt",
+                "text/plain", key=f"dl_{prefix}_txt",
+            )
+    if json_data is not None:
+        with cols[2]:
+            st.download_button(
+                "Download Config (JSON)", json_data, f"{prefix}.json",
+                "application/json", key=f"dl_{prefix}_json",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +525,16 @@ def page_reports():
 
                 with st.expander("Full Text Report"):
                     st.code(format_summary(summary))
+
+                # Export buttons
+                st.subheader("Export")
+                text_rpt = format_summary(summary)
+                holdings_df = pd.DataFrame(summary["holdings"]) if summary["holdings"] else None
+                _export_section(
+                    dataframe=holdings_df,
+                    text_report=text_rpt,
+                    prefix=f"summary_{mgr_name}",
+                )
             except Exception as e:
                 st.error(f"Error generating summary: {e}")
 
@@ -441,6 +558,14 @@ def page_reports():
 
                 with st.expander("Full Text Comparison"):
                     st.code(format_comparison(result))
+
+                # Export buttons
+                st.subheader("Export")
+                _export_section(
+                    dataframe=result["comparison_table"],
+                    text_report=format_comparison(result),
+                    prefix="strategy_comparison",
+                )
             except Exception as e:
                 st.error(f"Error: {e}")
         elif st.session_state.get("btn_compare") and len(selected) < 2:
@@ -469,74 +594,8 @@ def page_graph():
     if not selected:
         return
 
-    fig = go.Figure()
-
-    for mgr_name in selected:
-        mm = st.session_state["managers"][mgr_name]
-
-        # Collect value over time across all holdings
-        all_dates = set()
-        for inv in mm.investments.values():
-            if not inv.history.empty and "date" in inv.history.columns:
-                all_dates.update(inv.history["date"].tolist())
-
-        if not all_dates:
-            st.info(f"No data for {mgr_name}")
-            continue
-
-        sorted_dates = sorted(all_dates)
-        total_values = []
-        total_invested = []
-        total_dividends = []
-
-        for d in sorted_dates:
-            tv = 0.0
-            ti = 0.0
-            td = 0.0
-            for inv in mm.investments.values():
-                try:
-                    idx = inv._get_row_index(d)
-                    tv += inv.history.at[idx, "total_value"]
-                    ti += inv.history.loc[:idx, "purchase_amt"].sum()
-                    td += inv.history.at[idx, "total_dividend"]
-                except (ValueError, KeyError):
-                    pass
-            total_values.append(tv)
-            total_invested.append(ti)
-            total_dividends.append(td)
-
-        # Portfolio value line
-        fig.add_trace(go.Scatter(
-            x=sorted_dates, y=total_values,
-            mode="lines", name=f"{mgr_name} - Total Value",
-            line=dict(width=2),
-        ))
-
-        # Principal invested line
-        fig.add_trace(go.Scatter(
-            x=sorted_dates, y=total_invested,
-            mode="lines", name=f"{mgr_name} - Principal",
-            line=dict(width=1, dash="dash"),
-        ))
-
-        # Gains (value - principal)
-        gains = [v - p for v, p in zip(total_values, total_invested)]
-        fig.add_trace(go.Scatter(
-            x=sorted_dates, y=gains,
-            mode="lines", name=f"{mgr_name} - Unrealized Gain/Loss",
-            line=dict(width=1, dash="dot"),
-        ))
-
-    fig.update_layout(
-        title="Portfolio Performance Over Time",
-        xaxis_title="Date",
-        yaxis_title="Value ($)",
-        yaxis_tickformat="$,.0f",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        height=500,
-        hovermode="x unified",
-    )
-
+    managers_to_plot = {name: st.session_state["managers"][name] for name in selected}
+    fig = _build_portfolio_chart(managers_to_plot)
     st.plotly_chart(fig, use_container_width=True)
 
     # Summary metrics table
@@ -557,7 +616,12 @@ def page_graph():
             except Exception:
                 pass
         if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            snapshot_df = pd.DataFrame(rows)
+            st.dataframe(snapshot_df, use_container_width=True, hide_index=True)
+
+            # Export
+            st.subheader("Export")
+            _export_section(dataframe=snapshot_df, prefix="graph_snapshot")
 
 
 # ---------------------------------------------------------------------------
@@ -667,11 +731,519 @@ def _simulate_proportional_buys(mm, allocations):
 
 
 # ---------------------------------------------------------------------------
+# Page: Strategy Wizard (Features 1 + 2 + 3)
+# ---------------------------------------------------------------------------
+
+FREQ_OPTIONS = {
+    "MS": "Monthly",
+    "W-MON": "Weekly",
+    "2W": "Bi-weekly",
+    "QS": "Quarterly",
+}
+
+
+def page_strategy_wizard():
+    st.header("Strategy Wizard")
+    st.markdown(
+        "Define multiple investment strategies and compare them side-by-side "
+        "with a single click. Pick from built-in templates, load saved "
+        "strategies, or build your own."
+    )
+
+    available_tickers = list(st.session_state["investments"].keys())
+    if not available_tickers:
+        st.warning(
+            "No investments loaded. Use **Quick Demo** for sample data, "
+            "**Fetch Stock Data** to download real data, or "
+            "**Create Investments** to build manual data."
+        )
+        return
+
+    # ---- Shared settings ----
+    st.subheader("Shared Settings")
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    with col_s1:
+        mm_ticker = st.selectbox(
+            "Money market",
+            available_tickers,
+            index=available_tickers.index("VMFXX") if "VMFXX" in available_tickers else 0,
+            key="wiz_mm",
+        )
+    with col_s2:
+        wiz_start = st.date_input("Start date", value=pd.Timestamp("2022-01-03"), key="wiz_start")
+    with col_s3:
+        wiz_end = st.date_input("End date", value=pd.Timestamp("2023-12-25"), key="wiz_end")
+    with col_s4:
+        wiz_freq = st.selectbox(
+            "Deposit frequency",
+            list(FREQ_OPTIONS.keys()),
+            format_func=lambda x: FREQ_OPTIONS[x],
+            key="wiz_freq",
+        )
+    wiz_amount = st.number_input("Deposit amount ($)", value=1000.0, min_value=0.0, step=100.0, key="wiz_amount")
+
+    non_mm_tickers = [t for t in available_tickers if t != mm_ticker]
+
+    # ---- Build template choices ----
+    compatible_templates = get_compatible_templates(available_tickers)
+    saved_strategies = list_saved_strategies()
+    compatible_saved = {
+        name: cfg for name, cfg in saved_strategies.items()
+        if set(cfg.get("allocations", {}).keys()) | {cfg.get("money_market", "VMFXX")}
+        <= set(available_tickers)
+    }
+
+    template_choices = ["Custom"]
+    template_choices += compatible_templates
+    if compatible_saved:
+        template_choices += [f"[Saved] {name}" for name in compatible_saved.keys()]
+
+    # ---- Strategy definitions ----
+    st.divider()
+    st.subheader("Define Strategies")
+    num_strategies = st.number_input("Number of strategies to compare", 2, 4, 2, key="wiz_num")
+
+    strategy_configs = []
+    tabs = st.tabs([f"Strategy {i + 1}" for i in range(num_strategies)])
+
+    for i, tab in enumerate(tabs):
+        with tab:
+            selected_tmpl = st.selectbox(
+                "Start from template",
+                template_choices,
+                key=f"wiz_tmpl_{i}",
+            )
+
+            # Determine defaults based on selection
+            if selected_tmpl == "Custom":
+                def_name = f"Strategy {i + 1}"
+                def_allocs = {}
+            elif selected_tmpl.startswith("[Saved] "):
+                saved_name = selected_tmpl[8:]
+                cfg = compatible_saved[saved_name]
+                def_name = saved_name
+                def_allocs = cfg.get("allocations", {})
+            else:
+                cfg = STRATEGY_TEMPLATES[selected_tmpl]
+                def_name = selected_tmpl
+                def_allocs = cfg.get("allocations", {})
+
+            name = st.text_input(
+                "Strategy name",
+                value=def_name,
+                key=f"wiz_name_{i}_{selected_tmpl}",
+            )
+
+            # Ticker allocation
+            default_tickers = [t for t in def_allocs.keys() if t in non_mm_tickers]
+            selected_tickers = st.multiselect(
+                "Investment tickers",
+                non_mm_tickers,
+                default=default_tickers,
+                key=f"wiz_tk_{i}_{selected_tmpl}",
+            )
+
+            allocations = {}
+            if selected_tickers:
+                alloc_cols = st.columns(len(selected_tickers))
+                for j, ticker in enumerate(selected_tickers):
+                    with alloc_cols[j]:
+                        raw_default = def_allocs.get(ticker, 0.0)
+                        # Template values are 0-1 fractions; UI shows 0-100%
+                        default_pct = raw_default * 100.0 if raw_default <= 1.0 else raw_default
+                        if default_pct == 0.0 and len(selected_tickers) > 0:
+                            default_pct = round(100.0 / len(selected_tickers), 1)
+                        pct = st.number_input(
+                            f"{ticker} %",
+                            min_value=0.0,
+                            max_value=100.0,
+                            value=default_pct,
+                            step=5.0,
+                            key=f"wiz_pct_{i}_{selected_tmpl}_{ticker}",
+                        )
+                        allocations[ticker] = pct / 100.0
+
+            total_pct = sum(allocations.values()) * 100
+            if allocations and abs(total_pct - 100.0) > 0.1:
+                st.caption(f"Allocation total: {total_pct:.1f}% (remainder stays in money market)")
+
+            strategy_configs.append({
+                "name": name,
+                "allocations": allocations,
+                "deposit_freq": wiz_freq,
+                "deposit_amount": wiz_amount,
+                "money_market": mm_ticker,
+                "buy_strategy": "basic",
+            })
+
+    # ---- Save strategy ----
+    st.divider()
+    st.subheader("Save / Manage Strategies")
+    col_sv1, col_sv2 = st.columns([3, 1])
+    with col_sv1:
+        save_idx = st.selectbox(
+            "Strategy to save",
+            range(num_strategies),
+            format_func=lambda i: strategy_configs[i]["name"] if i < len(strategy_configs) else f"Strategy {i + 1}",
+            key="wiz_save_idx",
+        )
+    with col_sv2:
+        if st.button("Save to File", key="wiz_save_btn"):
+            cfg_to_save = strategy_configs[save_idx]
+            try:
+                filepath = save_strategy_config(cfg_to_save, cfg_to_save["name"])
+                st.success(f"Saved **{cfg_to_save['name']}** to `{filepath}`")
+            except Exception as e:
+                st.error(f"Error saving: {e}")
+
+    # Show saved strategies with delete option
+    if compatible_saved:
+        with st.expander("Manage Saved Strategies"):
+            for sname in list(compatible_saved.keys()):
+                col_d1, col_d2 = st.columns([4, 1])
+                col_d1.text(sname)
+                if col_d2.button("Delete", key=f"wiz_del_{sname}"):
+                    delete_saved_strategy(sname)
+                    st.rerun()
+
+    # ---- Run comparison ----
+    st.divider()
+    if st.button("Run Comparison", type="primary", key="wiz_run"):
+        # Validate
+        valid = True
+        for cfg in strategy_configs:
+            if not cfg["allocations"]:
+                st.error(f"Strategy **{cfg['name']}** has no ticker allocations. Select at least one ticker.")
+                valid = False
+
+        if valid:
+            results = {}
+            progress = st.progress(0, text="Running simulations...")
+            for idx, cfg in enumerate(strategy_configs):
+                progress.progress(idx / len(strategy_configs), text=f"Running {cfg['name']}...")
+                try:
+                    mm = build_and_run_strategy(
+                        cfg,
+                        st.session_state["investments"],
+                        str(wiz_start),
+                        str(wiz_end),
+                    )
+                    results[cfg["name"]] = mm
+                    st.session_state["managers"][cfg["name"]] = mm
+                except Exception as e:
+                    st.error(f"Error running **{cfg['name']}**: {e}")
+            progress.progress(1.0, text="Done!")
+
+            if len(results) >= 2:
+                configs_for_cmp = [
+                    {"name": name, "money_manager": mm}
+                    for name, mm in results.items()
+                ]
+                comparison = compare_strategies(
+                    configs_for_cmp, date=str(wiz_end),
+                )
+                st.session_state["wiz_comparison"] = comparison
+                st.session_state["wiz_results"] = results
+                st.session_state["wiz_configs"] = strategy_configs
+                st.session_state["wiz_end_date"] = str(wiz_end)
+            elif len(results) == 1:
+                st.info("Only one strategy ran successfully. Need at least 2 to compare.")
+
+    # ---- Display results ----
+    if "wiz_comparison" in st.session_state:
+        st.divider()
+        st.subheader("Comparison Results")
+
+        comparison = st.session_state["wiz_comparison"]
+        results = st.session_state["wiz_results"]
+        end_date = st.session_state["wiz_end_date"]
+
+        # Enhanced comparison table with return %
+        table = comparison["comparison_table"].copy()
+        if "Total Value" in table.columns and "Principal" in table.columns:
+            table["Total Return %"] = table.apply(
+                lambda row: (
+                    (row["Total Value"] - row["Principal"]) / row["Principal"] * 100
+                    if row["Principal"] > 0 else 0.0
+                ),
+                axis=1,
+            )
+
+        st.dataframe(
+            table.style.format({
+                "Total Value": "${:,.2f}",
+                "Principal": "${:,.2f}",
+                "Unrealized Gains": "${:,.2f}",
+                "Dividends": "${:,.2f}",
+                "Cash": "${:,.2f}",
+                "Total Return %": "{:.2f}%",
+            }, na_rep=""),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # Performance chart
+        fig = _build_portfolio_chart(results)
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Export section
+        st.subheader("Export Results")
+        text_rpt = format_comparison(comparison)
+        json_cfg = json.dumps(st.session_state.get("wiz_configs", []), indent=2)
+        _export_section(
+            dataframe=table,
+            text_report=text_rpt,
+            json_data=json_cfg,
+            prefix="wizard_comparison",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Page: Parameter Sweep (Feature 5)
+# ---------------------------------------------------------------------------
+
+def page_parameter_sweep():
+    st.header("Parameter Sweep")
+    st.markdown(
+        "See how changing one parameter (deposit amount or allocation "
+        "weight) affects investment outcomes across a range of values."
+    )
+
+    available_tickers = list(st.session_state["investments"].keys())
+    if not available_tickers:
+        st.warning(
+            "No investments loaded. Use **Quick Demo** for sample data."
+        )
+        return
+
+    # ---- Base strategy selection ----
+    st.subheader("Base Strategy")
+
+    compatible = get_compatible_templates(available_tickers)
+    saved = list_saved_strategies()
+    compatible_saved = {
+        name: cfg for name, cfg in saved.items()
+        if set(cfg.get("allocations", {}).keys()) | {cfg.get("money_market", "VMFXX")}
+        <= set(available_tickers)
+    }
+
+    all_choices = {}
+    for name in compatible:
+        all_choices[name] = STRATEGY_TEMPLATES[name]
+    for name, cfg in compatible_saved.items():
+        all_choices[f"[Saved] {name}"] = cfg
+
+    if not all_choices:
+        st.warning(
+            "No compatible templates found for loaded tickers. "
+            "Load more tickers or create a saved strategy via the Strategy Wizard."
+        )
+        return
+
+    base_name = st.selectbox("Select base strategy", list(all_choices.keys()), key="sweep_base")
+    base_config = copy.deepcopy(all_choices[base_name])
+
+    with st.expander("Base strategy details"):
+        st.json(base_config)
+
+    # ---- Date range ----
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        sweep_start = st.date_input("Start date", value=pd.Timestamp("2022-01-03"), key="sweep_start")
+    with col_d2:
+        sweep_end = st.date_input("End date", value=pd.Timestamp("2023-12-25"), key="sweep_end")
+
+    # ---- Sweep parameter ----
+    st.subheader("Parameter to Vary")
+    sweep_type = st.radio(
+        "Sweep type",
+        ["Deposit Amount", "Allocation Weight"],
+        horizontal=True,
+        key="sweep_type",
+    )
+
+    if sweep_type == "Deposit Amount":
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            sweep_min = st.number_input("Min ($)", value=500.0, min_value=0.0, step=100.0, key="sweep_min_amt")
+        with col2:
+            sweep_max = st.number_input("Max ($)", value=3000.0, min_value=0.0, step=100.0, key="sweep_max_amt")
+        with col3:
+            sweep_step = st.number_input("Step ($)", value=500.0, min_value=1.0, step=100.0, key="sweep_step_amt")
+
+        if sweep_min > sweep_max:
+            st.error("Min must be less than or equal to Max.")
+            return
+        values = list(np.arange(sweep_min, sweep_max + sweep_step / 2, sweep_step))
+
+    else:  # Allocation Weight
+        alloc_tickers = list(base_config["allocations"].keys())
+        if len(alloc_tickers) < 2:
+            st.warning(
+                "Allocation sweep requires a base strategy with at least 2 tickers. "
+                "Pick a different base strategy."
+            )
+            return
+
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            sweep_ticker = st.selectbox("Ticker to vary", alloc_tickers, key="sweep_ticker")
+        with col_t2:
+            other_tickers = [t for t in alloc_tickers if t != sweep_ticker]
+            complement_ticker = st.selectbox(
+                "Complementary ticker (gets the remainder)",
+                other_tickers,
+                key="sweep_complement",
+            )
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            sweep_min = st.number_input("Min %", value=0.0, min_value=0.0, max_value=100.0, step=5.0, key="sweep_min_pct")
+        with col2:
+            sweep_max = st.number_input("Max %", value=100.0, min_value=0.0, max_value=100.0, step=5.0, key="sweep_max_pct")
+        with col3:
+            sweep_step = st.number_input("Step %", value=10.0, min_value=1.0, max_value=50.0, step=5.0, key="sweep_step_pct")
+
+        if sweep_min > sweep_max:
+            st.error("Min must be less than or equal to Max.")
+            return
+        values = list(np.arange(sweep_min, sweep_max + sweep_step / 2, sweep_step))
+
+    st.caption(f"{len(values)} simulations will be run.")
+
+    # ---- Run sweep ----
+    if st.button("Run Sweep", type="primary", key="sweep_run"):
+        results = []
+        progress = st.progress(0, text="Running parameter sweep...")
+
+        for idx, val in enumerate(values):
+            config = copy.deepcopy(base_config)
+
+            if sweep_type == "Deposit Amount":
+                config["deposit_amount"] = float(val)
+                label = f"${val:,.0f}/mo"
+            else:
+                frac = float(val) / 100.0
+                config["allocations"][sweep_ticker] = frac
+                config["allocations"][complement_ticker] = 1.0 - frac
+                label = f"{val:.0f}% {sweep_ticker}"
+
+            progress.progress(idx / len(values), text=f"Running: {label}...")
+
+            try:
+                mm = build_and_run_strategy(
+                    config,
+                    st.session_state["investments"],
+                    str(sweep_start),
+                    str(sweep_end),
+                )
+                summary = financial_summary(mm, date=str(sweep_end))
+                principal = summary["total_principal"]
+                total_val = summary["total_portfolio_value"]
+                return_pct = (
+                    (total_val - principal) / principal * 100
+                    if principal > 0 else 0.0
+                )
+                results.append({
+                    "Parameter": label,
+                    "Total Value": total_val,
+                    "Principal": principal,
+                    "Unrealized Gains": summary["total_unrealized_gains"],
+                    "Total Return %": return_pct,
+                    "Dividends": summary["total_dividends"],
+                    "Cash": summary["cash"],
+                })
+            except Exception as e:
+                st.warning(f"Failed for {label}: {e}")
+
+        progress.progress(1.0, text="Done!")
+
+        if results:
+            st.session_state["sweep_results"] = results
+
+    # ---- Display results ----
+    if "sweep_results" in st.session_state:
+        results = st.session_state["sweep_results"]
+        df = pd.DataFrame(results)
+
+        st.divider()
+        st.subheader("Sweep Results")
+        st.dataframe(
+            df.style.format({
+                "Total Value": "${:,.2f}",
+                "Principal": "${:,.2f}",
+                "Unrealized Gains": "${:,.2f}",
+                "Total Return %": "{:.2f}%",
+                "Dividends": "${:,.2f}",
+                "Cash": "${:,.2f}",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # Bar + line chart
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df["Parameter"],
+            y=df["Total Value"],
+            name="Total Value",
+            marker_color="steelblue",
+        ))
+        fig.add_trace(go.Scatter(
+            x=df["Parameter"],
+            y=df["Principal"],
+            name="Principal Invested",
+            mode="lines+markers",
+            line=dict(color="orange", dash="dash"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=df["Parameter"],
+            y=df["Unrealized Gains"],
+            name="Unrealized Gains",
+            mode="lines+markers",
+            line=dict(color="green", dash="dot"),
+        ))
+        fig.update_layout(
+            title="Parameter Sweep Results",
+            xaxis_title="Parameter Value",
+            yaxis_title="Value ($)",
+            yaxis_tickformat="$,.0f",
+            barmode="overlay",
+            height=450,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Return % chart
+        fig_ret = go.Figure()
+        fig_ret.add_trace(go.Scatter(
+            x=df["Parameter"],
+            y=df["Total Return %"],
+            mode="lines+markers",
+            name="Total Return %",
+            line=dict(color="purple", width=2),
+        ))
+        fig_ret.update_layout(
+            title="Total Return % by Parameter",
+            xaxis_title="Parameter Value",
+            yaxis_title="Return %",
+            yaxis_tickformat=".1f",
+            height=350,
+        )
+        st.plotly_chart(fig_ret, use_container_width=True)
+
+        # Export
+        st.subheader("Export")
+        _export_section(dataframe=df, prefix="parameter_sweep")
+
+
+# ---------------------------------------------------------------------------
 # Main / Navigation
 # ---------------------------------------------------------------------------
 
 PAGES = {
     "Quick Demo": page_demo,
+    "Strategy Wizard": page_strategy_wizard,
+    "Parameter Sweep": page_parameter_sweep,
     "Fetch Stock Data": page_fetch_data,
     "Create Investments": page_create_investments,
     "Investment Schedule": page_schedule,
