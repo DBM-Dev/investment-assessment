@@ -34,6 +34,7 @@ from src.strategy_templates import (
     delete_saved_strategy,
     build_and_run_strategy,
 )
+from src.vanguard_etfs import VANGUARD_ETFS, get_etf_options, get_ticker_from_option
 
 logging.basicConfig(level=logging.INFO)
 
@@ -149,6 +150,28 @@ def _export_section(dataframe=None, text_report=None, json_data=None, prefix="ex
             )
 
 
+def _ticker_input(label, key, default_value=""):
+    """Render a ticker input that combines a Vanguard ETF dropdown with a
+    manual text entry fallback.  Returns the selected/entered ticker string
+    (uppercased) or empty string if nothing chosen."""
+    etf_options = get_etf_options()
+    choices = ["-- Manual entry --"] + etf_options
+
+    selected = st.selectbox(
+        f"{label} (Vanguard ETFs)",
+        choices,
+        key=f"{key}_vanguard_select",
+    )
+
+    if selected == "-- Manual entry --":
+        ticker = st.text_input(label, value=default_value, key=key)
+    else:
+        ticker = get_ticker_from_option(selected)
+        st.caption(f"Selected: **{ticker}** — {VANGUARD_ETFS.get(ticker, '')}")
+
+    return ticker.strip().upper() if ticker else ""
+
+
 # ---------------------------------------------------------------------------
 # Page: Fetch Stock Data
 # ---------------------------------------------------------------------------
@@ -169,12 +192,25 @@ def page_fetch_data():
             type="password",
             help="Get a free key at https://www.alphavantage.co/support/#api-key",
         )
+        etf_options = get_etf_options()
+        selected_etfs = st.multiselect(
+            "Select Vanguard ETFs",
+            etf_options,
+            default=[
+                opt for opt in etf_options
+                if get_ticker_from_option(opt) in ("VTI", "VNQ", "VOO")
+            ],
+            key="download_vanguard_etfs",
+        )
         tickers_input = st.text_input(
-            "Tickers (comma-separated)",
-            value="VTI, VNQ, VOO",
+            "Additional tickers (comma-separated)",
+            value="",
+            help="Enter non-Vanguard or additional ticker symbols here",
         )
         if st.button("Download", disabled=not api_key):
-            tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
+            tickers = [get_ticker_from_option(opt) for opt in selected_etfs]
+            manual = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
+            tickers.extend(t for t in manual if t not in tickers)
             from src.ticker_collection import download_ticker
 
             progress = st.progress(0, text="Starting downloads...")
@@ -196,7 +232,7 @@ def page_fetch_data():
 
     # --- Upload tab ---
     with tab_upload:
-        ticker = st.text_input("Ticker symbol", key="upload_ticker")
+        ticker = _ticker_input("Ticker symbol", key="upload_ticker")
         uploaded = st.file_uploader(
             "Upload Alpha Vantage CSV",
             type=["csv"],
@@ -240,7 +276,7 @@ def page_create_investments():
     # --- Stock from manual price data ---
     with tab_stock:
         st.markdown("Create a stock investment with manually entered price data.")
-        ticker = st.text_input("Ticker symbol", key="manual_ticker")
+        ticker = _ticker_input("Ticker symbol", key="manual_ticker")
         divisible = st.checkbox("Fractional shares allowed", value=True, key="manual_div")
         num_rows = st.number_input("Number of price rows", 2, 52, 12, key="manual_rows")
         start_date = st.date_input("Start date", value=pd.Timestamp("2023-01-02"), key="manual_start")
