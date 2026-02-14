@@ -38,7 +38,50 @@ Edit `.env` and replace `your_api_key_here` with your actual key:
 ALPHA_VANTAGE_API_KEY=your_actual_key
 ```
 
-## Usage
+## Streamlit Web Application
+
+The project includes a Streamlit web UI that provides access to all operations through an interactive browser interface, plus an interactive financial impact graph.
+
+### Running the App
+
+```bash
+streamlit run app.py
+```
+
+This opens the application at `http://localhost:8501`.
+
+### Quick Demo
+
+Select **Quick Demo** from the sidebar and click **Run Demo** to generate sample data and run a full simulation with no API key required. This creates two pre-built strategies (70/30 VTI/VNQ vs 100% VTI) that you can immediately explore in the Reports and Financial Impact Graph pages.
+
+### App Pages
+
+| Page | Description |
+|------|-------------|
+| **Quick Demo** | One-click sample simulation with two strategies |
+| **Fetch Stock Data** | Download data from Alpha Vantage or upload CSV files |
+| **Create Investments** | Create stock, CD, or money market fund investments |
+| **Investment Schedule** | Configure recurring deposit schedules (monthly, weekly, etc.) |
+| **Portfolio Management** | Build portfolios, execute schedules, and perform manual buy/sell/transfer operations |
+| **Financial Reports** | Generate single-strategy summaries or compare multiple strategies side by side |
+| **Financial Impact Graph** | Interactive Plotly chart showing portfolio value, principal, and unrealized gains over time |
+
+### Typical Workflow
+
+1. **Fetch or upload data** -- Load price history for your tickers via the API or CSV upload, or use **Quick Demo** to skip this step.
+2. **Create a money market fund** -- Every portfolio needs a cash account (e.g. VMFXX).
+3. **Create investments** -- Add stocks or CDs to the application.
+4. **Set up a schedule** -- Define recurring deposits with a start date, end date, frequency, and amount.
+5. **Build a portfolio** -- Select investments and attach a schedule.
+6. **Execute the schedule** -- Run the schedule to process all deposits.
+7. **View reports** -- Generate summaries and compare strategies.
+8. **Explore the graph** -- Visualize portfolio performance over time with hover, zoom, and multi-portfolio overlay.
+
+---
+
+## Python API Usage
+
+The modules can also be used directly in Python scripts.
 
 ### 1. Fetch Stock Data
 
@@ -156,14 +199,15 @@ pytest tests/ --cov=src --cov-report=html
 ## Project Structure
 
 ```
+app.py                    # Streamlit web application
 src/
-  ticker_collection.py  # Fetch and parse Alpha Vantage market data
-  investment.py         # Individual investment tracking (stocks, CDs)
-  money_manager.py      # Portfolio management and transaction execution
-  schedule.py           # Deposit schedules and auto-buy strategies
-  reporting.py          # Financial summaries and strategy comparisons
+  ticker_collection.py    # Fetch and parse Alpha Vantage market data
+  investment.py           # Individual investment tracking (stocks, CDs)
+  money_manager.py        # Portfolio management and transaction execution
+  schedule.py             # Deposit schedules and auto-buy strategies
+  reporting.py            # Financial summaries and strategy comparisons
 tests/
-  conftest.py           # Shared pytest fixtures
+  conftest.py             # Shared pytest fixtures
   test_investment.py
   test_money_manager.py
   test_schedule.py
