@@ -8,12 +8,12 @@ import pandas as pd
 import logging
 from datetime import datetime
 
-logger = logging.get_logger('main_logger')
+logger = logging.getLogger('main_logger')
 
 class Schedule(object):
-    '''The Schedule class contains information and methods related to the 
+    '''The Schedule class contains information and methods related to the
     schedule of investments made.
-    
+
     ATTRIBUTES:
 
     hist - pandas dataframe with fields of date, activity_type, from, to, and dollars
@@ -25,9 +25,12 @@ class Schedule(object):
     auto_buy_balanced - this method automates purchasing investments, aiming to balance the portfolio with each purchase
     load_history - this method loads a history.csv file in the format of the history dataframe
     add_transaction - this method adds a single transaction with the values specified'''
-    def __init__(self, hist=pd.Dataframe(), money_market='VMFXX', minimum_amt=0):
+    def __init__(self, hist=None, money_market='VMFXX', minimum_amt=0):
         '''Initialize the class'''
-        self.hist = hist
+        if hist is None:
+            self.hist = pd.DataFrame()
+        else:
+            self.hist = hist
         self.money_market = money_market
         self.minimum_amt = minimum_amt
         logger.info(f'Schedule class initialized with history of length {len(self.hist)} with money_market {self.money_market}')
@@ -47,11 +50,16 @@ class Schedule(object):
 
         ACTIONS:
         updates self.hist if replace_hist = True'''
-        calendar = pd.DataFrame({'date':pd.date_range(start=start, end=end, freq=freq), 'activity_type': 'deposit', 'dollars':amount, 'from':'External', 'to':self.money_market})
+        if stop is None:
+            stop = datetime.today()
+        calendar = pd.DataFrame({'date': pd.date_range(start=start, end=stop, freq=freq), 'activity_type': 'deposit', 'dollars': amount, 'source': 'External', 'to': self.money_market})
         logger.debug(f'Created calendar of shape {calendar.shape}, with a total deposit of {calendar["dollars"].sum()}')
-        if replace_hist == True:
+        if replace_hist:
             self.hist = calendar
             logger.debug(f'Replaced self.hist with new calendar')
+        else:
+            self.hist = pd.concat([self.hist, calendar], ignore_index=True)
+            logger.debug(f'Appended new calendar to existing self.hist')
         return calendar
 
     def auto_buy_basic(self, money_manager, ticket_lookup, update_hist=True):
@@ -73,7 +81,7 @@ class Schedule(object):
         # Loop through each deposit_date
         for deposit_date in hst.loc[hst['activity_type']=='deposit']['date'].unique():
             logger.debug(f'Attempting to purchase after deposits on {deposit_date}')
-            avaialble_funds = money_manager.investments[self.money_market].get_funds_available(date=deposit_date)
+            available_funds = money_manager.investments[self.money_market].get_funds_available(date=deposit_date)
             logger.debug(f'{available_funds} are available to purchase')
             denominator = ticket_lookup['value'].sum()
             ticket_lookup['purchase_dollars'] = ticket_lookup['value'] / denominator * available_funds
@@ -81,14 +89,16 @@ class Schedule(object):
             for ticket in ticket_lookup.keys():
                 purchase_dollars = ticket_lookup.loc[ticket,'purchase_dollars']
                 logger.debug(f'Attempting to purchase {purchase_dollars} dollars of {ticket}')
-                stock, dollars = money_manager.investments[ticket].buy_investment(dollars=purchase_dollars, date=deposit_date, req_integer=True, from=money_manager.investments[self.money_market])
+                stock, dollars = money_manager.investments[ticket].buy_investment(dollars=purchase_dollars, date=deposit_date, req_integer=True, from_acct=money_manager.investments[self.money_market])
                 if stock > 0:
-                    self.add_transaction(from=self.money_manager, to=ticket, activity_type='buy/sell', date=deposit_date, amount=dollars)
+                    self.add_transaction(source=self.money_market, to=ticket, activity_type='buy/sell', date=deposit_date, amount=dollars)
                     logger.debug(f'Purchased {stock} stocks of {ticket} for a total of ${dollars}')
                     tot_dollars += dollars
                 else:
                     logger.debug(f'Did not purchase any {stock}, insufficient funds available')
-            logger.debug(f'Finished purchased ${tot_dollars} of stock. ${money_manager.investments[self.money_market].get_funds(date=deposit_date)} remain in {self.money_market} on {date_deposit}, ${money_manager.investments[self.money_market].get_funds_available(date=deposit_date)} available to purchase')
+            logger.debug(f'Finished purchased ${tot_dollars} of stock. ${money_manager.investments[self.money_market].get_funds(date=deposit_date)} remain in {self.money_market} on {deposit_date}, ${money_manager.investments[self.money_market].get_funds_available(date=deposit_date)} available to purchase')
+        if update_hist:
+            self.hist = hst
         logger.info(f'Finished auto buying from deposits')
         return hst
 
@@ -105,13 +115,108 @@ class Schedule(object):
 
         ACTIONS:
         updates self.hist if update_hist = True'''
-        pass
+        import math
 
-    def add_transaction(self, from, to, activity_type, date, amount, hist=None):
+        logger.info(f'Attempting balanced auto buy of {len(ticket_lookup.keys())} tickets after each deposit')
+        hst = self.hist.copy()
+
+        for deposit_date in hst.loc[hst['activity_type'] == 'deposit']['date'].unique():
+            logger.debug(f'Balanced buy: processing deposits on {deposit_date}')
+            available_funds = money_manager.investments[self.money_market].get_funds_available(date=deposit_date)
+
+            if available_funds <= self.minimum_amt:
+                logger.debug(f'Only ${available_funds:.2f} available, below minimum ${self.minimum_amt}')
+                continue
+
+            # Compute target allocation fractions
+            denominator = ticket_lookup['value'].sum()
+            if denominator == 0:
+                continue
+
+            # Get current portfolio value for each ticket
+            current_values = {}
+            total_portfolio = 0.0
+            for ticket in ticket_lookup.index:
+                if ticket in money_manager.investments:
+                    try:
+                        val = money_manager.investments[ticket].get_funds(date=deposit_date)
+                    except (ValueError, KeyError):
+                        val = 0.0
+                else:
+                    val = 0.0
+                current_values[ticket] = val
+                total_portfolio += val
+
+            # Target portfolio value after investing available funds
+            target_total = total_portfolio + available_funds
+
+            # Determine how much each ticket needs to reach its target allocation
+            deficits = {}
+            for ticket in ticket_lookup.index:
+                target_frac = ticket_lookup.loc[ticket, 'value'] / denominator
+                target_value = target_frac * target_total
+                deficit = target_value - current_values.get(ticket, 0.0)
+                deficits[ticket] = max(0.0, deficit)
+
+            # Sort tickets by deficit (largest deficit first) to prioritize
+            # the most underweight positions
+            sorted_tickets = sorted(deficits.keys(), key=lambda t: deficits[t], reverse=True)
+
+            remaining_funds = available_funds
+            tot_dollars = 0
+
+            for ticket in sorted_tickets:
+                if remaining_funds <= self.minimum_amt:
+                    break
+
+                purchase_dollars = min(deficits[ticket], remaining_funds)
+
+                if purchase_dollars <= 0:
+                    continue
+
+                if ticket not in money_manager.investments:
+                    logger.debug(f'Ticket {ticket} not in money_manager, skipping')
+                    continue
+
+                inv = money_manager.investments[ticket]
+                price = inv._get_price(deposit_date)
+
+                # Respect integer-share constraints
+                if not inv.divisible:
+                    shares = math.floor(purchase_dollars / price) if price > 0 else 0
+                    purchase_dollars = shares * price
+                    if shares <= 0:
+                        continue
+
+                stock, dollars = inv.buy_investment(
+                    dollars=purchase_dollars, date=deposit_date,
+                    req_integer=(not inv.divisible),
+                    from_acct=money_manager.investments[self.money_market]
+                )
+
+                if stock > 0:
+                    self.add_transaction(
+                        source=self.money_market, to=ticket,
+                        activity_type='buy/sell', date=deposit_date,
+                        amount=dollars
+                    )
+                    logger.debug(f'Balanced buy: {stock} shares of {ticket} for ${dollars:.2f}')
+                    tot_dollars += dollars
+                    remaining_funds -= dollars
+
+            logger.debug(f'Balanced buy on {deposit_date}: ${tot_dollars:.2f} invested, '
+                          f'${remaining_funds:.2f} remaining')
+
+        if update_hist:
+            self.hist = hst
+        logger.info(f'Finished balanced auto buying from deposits')
+        return hst
+
+    def add_transaction(self, source, to, activity_type, date, amount, hist=None):
         '''This module adds transactions to the history. If no history is provided, then it adds them to the self.hist
 
         INPUTS:
-        from - stock money is coming from
+        source - stock money is coming from
         to - stock money is going to
         activity_type - activity type
         date - date of transaction
@@ -123,13 +228,12 @@ class Schedule(object):
 
         ACTIONS:
         updates self.hist if hist=None'''
-        logger.info(f'Adding a transfer of ${amount} from {from} to {to} on {date}')
-        new_transaction = pd.DataFrame({'date':[date], 'activity_type':'buy/sell', 'dollars':amount,'from':from,'to':to})
+        logger.info(f'Adding a transfer of ${amount} from {source} to {to} on {date}')
+        new_transaction = pd.DataFrame({'date': [date], 'activity_type': activity_type, 'dollars': amount, 'source': source, 'to': to})
         if hist is None:
-            self.hist = pd.concat([self.hist,new_transaction])
+            self.hist = pd.concat([self.hist, new_transaction], ignore_index=True)
             hist = self.hist
         else:
-            hist = pd.concat([hist,new_transaction])
+            hist = pd.concat([hist, new_transaction], ignore_index=True)
         logger.info('Returning updated history')
         return hist
-
