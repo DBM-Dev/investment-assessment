@@ -16,6 +16,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import os
+import sys
+import subprocess
 import json
 import logging
 import tempfile
@@ -148,6 +150,58 @@ def _export_section(dataframe=None, text_report=None, json_data=None, prefix="ex
                 "Download Config (JSON)", json_data, f"{prefix}.json",
                 "application/json", key=f"dl_{prefix}_json",
             )
+
+
+def _handle_redeploy():
+    """Pull the latest code from git, install dependencies, and restart the app."""
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    requirements_path = os.path.join(app_dir, "requirements.txt")
+
+    # Step 1: git pull
+    with st.sidebar:
+        with st.spinner("Pulling latest changes..."):
+            git_result = subprocess.run(
+                ["git", "pull"],
+                cwd=app_dir,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+        if git_result.returncode != 0:
+            st.error(f"git pull failed:\n```\n{git_result.stderr}\n```")
+            return
+
+        st.success(f"git pull: {git_result.stdout.strip()}")
+
+        # Step 2: pip install (best-effort — don't block restart on failure)
+        with st.spinner("Installing dependencies..."):
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", "-r", requirements_path],
+                cwd=app_dir,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+
+        st.info("Restarting application...")
+
+    # Step 3: Restart the process by re-exec'ing the original command line.
+    # Reading /proc/self/cmdline preserves any flags Streamlit was started
+    # with (e.g. --server.port).
+    try:
+        with open("/proc/self/cmdline", "rb") as f:
+            raw = f.read().split(b"\x00")
+            cmdline = [arg.decode() for arg in raw if arg]
+    except (IOError, OSError):
+        # Fallback: reconstruct a reasonable default command.
+        cmdline = [
+            sys.executable, "-m", "streamlit", "run",
+            os.path.join(app_dir, "app.py"),
+        ]
+
+    os.chdir(app_dir)
+    os.execv(cmdline[0], cmdline)
 
 
 def _ticker_input(label, key, default_value=""):
@@ -1309,6 +1363,16 @@ def main():
         f"Schedules: {len(st.session_state['schedules'])} | "
         f"Portfolios: {len(st.session_state['managers'])}"
     )
+
+    # Redeploy section
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("Update & Redeploy"):
+        st.caption(
+            "Pull the latest code from git and restart the application. "
+            "All active sessions will be disconnected."
+        )
+        if st.button("Update & Redeploy", type="primary", key="btn_redeploy"):
+            _handle_redeploy()
 
     PAGES[page]()
 
