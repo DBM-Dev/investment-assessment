@@ -412,3 +412,112 @@ class CDInvestment(Investment):
         monthly_interest = self.principal * self.rate / 12.0
         penalty = monthly_interest * self.early_withdrawal_penalty_months
         return penalty
+
+
+class SavingsAccount(Investment):
+    '''Represents a savings account with a fixed APY (Annual Percentage Yield).
+
+    Unlike CDs, savings accounts have no fixed term or early withdrawal
+    penalty. Deposits and withdrawals can be made freely at any time.
+    Interest compounds at each payout period based on the specified APY.'''
+
+    def __init__(self, ticker, apy, start_date, end_date, payout_freq='MS',
+                 initial_deposit=0.0):
+        '''Initialize a savings account.
+
+        INPUTS:
+        ticker - identifier string (e.g. "HYSA-4.5%")
+        apy - annual percentage yield as a decimal (e.g. 0.045 for 4.5%)
+        start_date - first date of the account history
+        end_date - last date of the account history
+        payout_freq - pandas frequency string for interest payouts (default monthly)
+        initial_deposit - optional opening deposit amount'''
+        self.apy = apy
+        self.start_date = pd.Timestamp(start_date)
+        self.end_date = pd.Timestamp(end_date)
+        self.payout_freq = payout_freq
+
+        # Build the date range for the account history
+        dates = pd.date_range(start=self.start_date, end=self.end_date,
+                              freq=payout_freq)
+        if dates.empty:
+            dates = pd.DatetimeIndex([self.start_date, self.end_date])
+
+        # Calculate periodic rate from APY so that compounding over one year
+        # yields the stated APY:
+        #   APY = (1 + periodic_rate) ^ periods_per_year - 1
+        #   periodic_rate = (1 + APY) ^ (1 / periods_per_year) - 1
+        #
+        # Estimate periods per year from the date range.
+        total_days = (self.end_date - self.start_date).days
+        num_periods = len(dates)
+        if total_days > 0 and num_periods > 1:
+            periods_per_year = num_periods / (total_days / 365.0)
+            periodic_rate = (1 + apy) ** (1 / periods_per_year) - 1
+        else:
+            periodic_rate = apy
+
+        price_history = pd.DataFrame({
+            'date': dates,
+            'ticker_price': 1.0,
+            'per_stock_return': periodic_rate,
+            'purchase_amt': 0.0,
+            'sell_amt': 0.0,
+            'total_dividend': 0.0,
+            'total_owned': 0.0,
+            'total_value': 0.0,
+        })
+
+        super().__init__(ticker, price_history=price_history, divisible=True)
+
+        # Record the initial deposit if provided
+        if initial_deposit > 0:
+            self.buy_investment(dollars=initial_deposit, date=start_date)
+
+        logger.info(f'Savings account initialized: {ticker}, apy={apy}, '
+                     f'{start_date} to {end_date}, '
+                     f'initial_deposit=${initial_deposit:.2f}')
+
+    def recalc_investment(self):
+        '''Recalculate the savings account history with compound interest.
+
+        Overrides the base class to add earned interest back to the balance
+        each period, so that interest compounds correctly.'''
+        if self.history.empty:
+            return
+
+        self.history = self.history.sort_values('date').reset_index(drop=True)
+
+        cumulative_shares = 0.0
+        cumulative_dividends = 0.0
+
+        for idx in self.history.index:
+            row = self.history.loc[idx]
+            price = row['ticker_price']
+
+            # Deposits this period
+            if price > 0 and row['purchase_amt'] > 0:
+                bought = row['purchase_amt'] / price
+            else:
+                bought = 0.0
+
+            # Withdrawals this period
+            if price > 0 and row['sell_amt'] > 0:
+                sold = row['sell_amt'] / price
+            else:
+                sold = 0.0
+
+            cumulative_shares += bought - sold
+
+            # Interest earned this period, added back to balance (compounding)
+            interest = row['per_stock_return'] * cumulative_shares
+            cumulative_shares += interest
+            cumulative_dividends += interest
+
+            self.history.at[idx, 'total_dividend'] = cumulative_dividends
+            self.history.at[idx, 'total_owned'] = cumulative_shares
+            self.history.at[idx, 'total_value'] = cumulative_shares * price
+
+        logger.debug(f'Recalculated savings {self.ticker}: '
+                      f'${cumulative_shares:.2f} balance, '
+                      f'${cumulative_dividends:.2f} total interest')
