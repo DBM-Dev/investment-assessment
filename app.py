@@ -494,36 +494,39 @@ def page_portfolio():
         default=available_tickers,
         key="port_tickers",
     )
-    selected_schedule = st.selectbox(
-        "Schedule to attach",
-        ["(none)"] + schedule_names,
-        key="port_schedule",
+    selected_schedules = st.multiselect(
+        "Schedules to attach",
+        schedule_names,
+        key="port_schedules",
     )
 
     if st.button("Create Portfolio", key="btn_create_port"):
-        sched = st.session_state["schedules"].get(selected_schedule) if selected_schedule != "(none)" else None
-        mm = MoneyManager(schedule=sched, money_market_ticker=mm_ticker)
+        scheds = [st.session_state["schedules"][s] for s in selected_schedules] if selected_schedules else []
+        mm = MoneyManager(schedules=scheds, money_market_ticker=mm_ticker)
         for t in selected_tickers:
             mm.add_investment(st.session_state["investments"][t])
         st.session_state["managers"][mgr_name] = mm
+        sched_info = f" and {len(scheds)} schedule(s)" if scheds else ""
         st.success(
-            f"Created portfolio **{mgr_name}** with {len(mm.investments)} investments"
+            f"Created portfolio **{mgr_name}** with {len(mm.investments)} investments{sched_info}"
         )
 
     # Run schedule
     if st.session_state["managers"]:
         st.divider()
         st.subheader("Execute Schedule")
-        mgr_to_run = st.selectbox("Select portfolio", list(st.session_state["managers"].keys()), key="run_mgr")
+        mgr_names = list(st.session_state["managers"].keys())
+        mgr_to_run = st.selectbox("Select portfolio", mgr_names, key="run_mgr")
         if st.button("Run Schedule", key="btn_run_sched"):
             mm = st.session_state["managers"][mgr_to_run]
-            if mm.schedule is None:
-                st.error("This portfolio has no schedule attached.")
+            if not mm.schedules:
+                st.error("This portfolio has no schedules attached.")
             else:
                 try:
                     mm.run_schedule()
                     st.success(
-                        f"Executed {len(mm.activity_lst)} transactions on **{mgr_to_run}**"
+                        f"Executed {len(mm.activity_lst)} transactions from "
+                        f"{len(mm.schedules)} schedule(s) on **{mgr_to_run}**"
                     )
                 except Exception as e:
                     st.error(f"Error running schedule: {e}")

@@ -27,7 +27,7 @@ class TestMoneyManagerInit:
     def test_init_defaults(self):
         mm = MoneyManager()
         assert mm.investments == {}
-        assert mm.schedule is None
+        assert mm.schedules == []
         assert mm.activity_lst == []
         assert mm.money_market_ticker == 'VMFXX'
 
@@ -120,7 +120,26 @@ class TestRunSchedule:
             freq='MS',
             amount=1000.0,
         )
-        portfolio.schedule = sched
+        portfolio.schedules = [sched]
+        portfolio.run_schedule()
+        assert len(portfolio.activity_lst) > 0
+
+    def test_run_multiple_schedules(self, portfolio):
+        sched1 = Schedule()
+        sched1.automate_investment_schedule(
+            start='2023-01-02',
+            stop='2023-02-01',
+            freq='MS',
+            amount=500.0,
+        )
+        sched2 = Schedule()
+        sched2.automate_investment_schedule(
+            start='2023-02-06',
+            stop='2023-03-01',
+            freq='MS',
+            amount=750.0,
+        )
+        portfolio.schedules = [sched1, sched2]
         portfolio.run_schedule()
         assert len(portfolio.activity_lst) > 0
 

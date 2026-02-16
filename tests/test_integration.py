@@ -76,7 +76,7 @@ class TestEndToEnd:
         )
 
         # Execute deposit schedule
-        mm.schedule = sched
+        mm.schedules = [sched]
         mm.run_schedule()
 
         # Verify deposits were made

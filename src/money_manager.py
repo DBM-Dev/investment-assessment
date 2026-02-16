@@ -17,28 +17,35 @@ class MoneyManager(object):
     ATTRIBUTES:
 
     investments - dictionary of Investment objects keyed by ticker
-    schedule - a Schedule instance defining the investment plan
+    schedules - list of Schedule instances defining the investment plan
     activity_lst - ordered list of all executed transactions
 
     METHODS:
 
     return_current_financial_state - return a summary of all holdings
+    add_schedule - add a Schedule instance to the portfolio
     transfer_cash - move money from external source into money market
     buy_ticket - move money from money market into a stock position
     sell_ticket - liquidate a stock position back into money market'''
 
-    def __init__(self, schedule=None, money_market_ticker='VMFXX'):
+    def __init__(self, schedule=None, schedules=None, money_market_ticker='VMFXX'):
         '''Initialize the MoneyManager.
 
         INPUTS:
-        schedule - optional Schedule instance
+        schedule - optional single Schedule instance (convenience; added to schedules list)
+        schedules - optional list of Schedule instances
         money_market_ticker - ticker symbol for the default money market fund'''
         self.investments = {}
-        self.schedule = schedule
+        self.schedules = []
+        if schedules is not None:
+            self.schedules = list(schedules)
+        if schedule is not None:
+            self.schedules.append(schedule)
         self.activity_lst = []
         self.money_market_ticker = money_market_ticker
         logger.info(f'MoneyManager initialized with money market '
-                     f'{self.money_market_ticker}')
+                     f'{self.money_market_ticker} and '
+                     f'{len(self.schedules)} schedule(s)')
 
     def add_investment(self, investment):
         '''Add an Investment object to the portfolio.
@@ -47,6 +54,14 @@ class MoneyManager(object):
         investment - an Investment instance'''
         self.investments[investment.ticker] = investment
         logger.info(f'Added investment {investment.ticker} to portfolio')
+
+    def add_schedule(self, schedule):
+        '''Add a Schedule instance to the portfolio.
+
+        INPUTS:
+        schedule - a Schedule instance'''
+        self.schedules.append(schedule)
+        logger.info(f'Added schedule to portfolio (now {len(self.schedules)} schedule(s))')
 
     def return_current_financial_state(self, date=None):
         '''Return a summary of all holdings, cash, and total portfolio value.
@@ -244,19 +259,26 @@ class MoneyManager(object):
         return (shares_sold, dollars_received)
 
     def run_schedule(self):
-        '''Execute all transactions defined in self.schedule against
+        '''Execute all transactions defined in self.schedules against
         the current portfolio.
 
-        Processes deposits (transfer_cash) and buy/sell transactions
+        Merges transaction histories from all attached schedules and
+        processes deposits (transfer_cash) and buy/sell transactions
         in chronological order.'''
-        if self.schedule is None:
-            raise ValueError('No schedule has been set')
+        if not self.schedules:
+            raise ValueError('No schedules have been set')
 
-        if self.schedule.hist.empty:
-            logger.warning('Schedule history is empty, nothing to execute')
+        # Merge histories from all schedules
+        all_hists = []
+        for sched in self.schedules:
+            if not sched.hist.empty:
+                all_hists.append(sched.hist)
+
+        if not all_hists:
+            logger.warning('All schedule histories are empty, nothing to execute')
             return
 
-        hist = self.schedule.hist.sort_values('date').reset_index(drop=True)
+        hist = pd.concat(all_hists, ignore_index=True).sort_values('date').reset_index(drop=True)
 
         for _, row in hist.iterrows():
             date = row['date']
@@ -273,5 +295,5 @@ class MoneyManager(object):
                 else:
                     self.sell_ticket(dollars=dollars, date=date, ticket=source)
 
-        logger.info(f'Finished executing schedule: '
+        logger.info(f'Finished executing {len(self.schedules)} schedule(s): '
                      f'{len(hist)} transactions processed')
