@@ -21,6 +21,7 @@ import subprocess
 import json
 import logging
 import tempfile
+import time
 import copy
 
 from src.investment import Investment, CDInvestment
@@ -269,6 +270,9 @@ def page_fetch_data():
 
             progress = st.progress(0, text="Starting downloads...")
             for i, ticker in enumerate(tickers):
+                # Wait between API calls to avoid Alpha Vantage rate limits
+                if i > 0:
+                    time.sleep(1.5)
                 progress.progress(
                     (i) / len(tickers),
                     text=f"Downloading {ticker}...",
