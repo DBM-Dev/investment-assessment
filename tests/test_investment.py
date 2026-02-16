@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from investment import Investment, CDInvestment
+from investment import Investment, CDInvestment, SavingsAccount
 
 
 class TestInvestmentInit:
@@ -208,3 +208,167 @@ class TestFromCSV:
         # Avg price of first row (sorted by date): (100+94)/2 = 97.0
         assert inv.history.iloc[0]['ticker_price'] == pytest.approx(97.0)
         assert inv.divisible is True
+
+
+class TestSavingsAccount:
+    def test_init_basic(self):
+        sa = SavingsAccount(
+            ticker='HYSA-4.5%',
+            apy=0.045,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+        )
+        assert sa.ticker == 'HYSA-4.5%'
+        assert sa.apy == 0.045
+        assert sa.divisible is True
+        assert not sa.history.empty
+        # All prices should be 1.0
+        assert (sa.history['ticker_price'] == 1.0).all()
+
+    def test_init_with_initial_deposit(self):
+        sa = SavingsAccount(
+            ticker='HYSA',
+            apy=0.05,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+            initial_deposit=10000.0,
+        )
+        # The first row should have a purchase recorded
+        assert sa.history.iloc[0]['purchase_amt'] == 10000.0
+        # After recalc, we should own shares
+        assert sa.history.iloc[0]['total_owned'] > 0
+
+    def test_compound_interest_over_one_year(self):
+        """Verify that a 5% APY compounded monthly yields ~5% after one year."""
+        sa = SavingsAccount(
+            ticker='HYSA',
+            apy=0.05,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+            payout_freq='MS',
+            initial_deposit=10000.0,
+        )
+        final_value = sa.history.iloc[-1]['total_value']
+        # Should be close to $10,500 (5% APY on $10,000)
+        assert final_value == pytest.approx(10500.0, rel=0.01)
+
+    def test_interest_accrues_each_period(self):
+        sa = SavingsAccount(
+            ticker='HYSA',
+            apy=0.05,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+            payout_freq='MS',
+            initial_deposit=10000.0,
+        )
+        # total_dividend (interest) should increase over time
+        dividends = sa.history['total_dividend'].tolist()
+        for i in range(1, len(dividends)):
+            assert dividends[i] >= dividends[i - 1]
+
+    def test_deposit_mid_period(self):
+        sa = SavingsAccount(
+            ticker='HYSA',
+            apy=0.05,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+            payout_freq='MS',
+            initial_deposit=5000.0,
+        )
+        # Add another deposit mid-year
+        sa.buy_investment(dollars=5000.0, date='2023-07-01')
+        # Final value should reflect both deposits plus interest
+        final_value = sa.history.iloc[-1]['total_value']
+        # Must be more than $10,000 (principal) due to interest
+        assert final_value > 10000.0
+
+    def test_withdrawal(self):
+        sa = SavingsAccount(
+            ticker='HYSA',
+            apy=0.05,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+            payout_freq='MS',
+            initial_deposit=10000.0,
+        )
+        # Withdraw $3000 mid-year
+        shares_sold, dollars_received = sa.sell_investment(
+            date='2023-07-01', dollar_amount=3000.0
+        )
+        assert shares_sold > 0
+        assert dollars_received == pytest.approx(3000.0, rel=0.01)
+        # Final balance should be less than the no-withdrawal case
+        final_value = sa.history.iloc[-1]['total_value']
+        assert final_value < 10500.0
+        assert final_value > 7000.0
+
+    def test_multiple_deposits_and_withdrawals(self):
+        sa = SavingsAccount(
+            ticker='HYSA',
+            apy=0.05,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+            payout_freq='MS',
+            initial_deposit=1000.0,
+        )
+        # Monthly deposits of $500
+        for month in range(2, 7):
+            date = f'2023-{month:02d}-01'
+            sa.buy_investment(dollars=500.0, date=date)
+        # One withdrawal
+        sa.sell_investment(date='2023-08-01', dollar_amount=1000.0)
+
+        final_value = sa.history.iloc[-1]['total_value']
+        total_deposited = 1000.0 + 500.0 * 5  # $3,500
+        total_withdrawn = 1000.0
+        net_deposited = total_deposited - total_withdrawn  # $2,500
+        # Should be more than net deposited due to interest
+        assert final_value > net_deposited
+
+    def test_zero_apy(self):
+        sa = SavingsAccount(
+            ticker='HYSA-0%',
+            apy=0.0,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+            initial_deposit=10000.0,
+        )
+        final_value = sa.history.iloc[-1]['total_value']
+        # No interest, should equal deposit
+        assert final_value == pytest.approx(10000.0)
+
+    def test_divisible_fractional_deposits(self):
+        """Savings accounts should allow any dollar amount."""
+        sa = SavingsAccount(
+            ticker='HYSA',
+            apy=0.04,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+            initial_deposit=0.0,
+        )
+        shares, dollars = sa.buy_investment(dollars=123.45, date='2023-01-01')
+        assert dollars == pytest.approx(123.45)
+        assert shares == pytest.approx(123.45)  # price is 1.0
+
+    def test_get_funds_available(self):
+        sa = SavingsAccount(
+            ticker='HYSA',
+            apy=0.05,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+            initial_deposit=10000.0,
+        )
+        available = sa.get_funds_available('2023-06-01')
+        assert available > 0
+
+    def test_get_funds(self):
+        sa = SavingsAccount(
+            ticker='HYSA',
+            apy=0.05,
+            start_date='2023-01-01',
+            end_date='2024-01-01',
+            initial_deposit=10000.0,
+        )
+        value = sa.get_funds('2023-06-01')
+        # Should have grown from initial deposit
+        assert value > 10000.0

@@ -31,6 +31,7 @@ def financial_summary(money_manager, date=None):
     total_principal = 0.0
     total_dividends = 0.0
     total_cd_interest = 0.0
+    total_savings_interest = 0.0
     total_unrealized_gains = 0.0
     holdings_detail = []
 
@@ -45,14 +46,20 @@ def financial_summary(money_manager, date=None):
         net_invested = invested - sold
         unrealized_gain = value - net_invested
 
-        # Classify CD interest vs stock dividends
+        # Classify interest/dividends by investment type
         inv = money_manager.investments.get(ticker)
         is_cd = hasattr(inv, 'rate') and hasattr(inv, 'end_date')
+        is_savings = hasattr(inv, 'apy')
 
         if is_cd:
             total_cd_interest += dividends
+            inv_type = 'CD'
+        elif is_savings:
+            total_savings_interest += dividends
+            inv_type = 'Savings'
         else:
             total_dividends += dividends
+            inv_type = 'Stock'
 
         total_principal += net_invested
         total_unrealized_gains += unrealized_gain
@@ -67,7 +74,7 @@ def financial_summary(money_manager, date=None):
             'net_invested': net_invested,
             'unrealized_gain': unrealized_gain,
             'dividends': dividends,
-            'type': 'CD' if is_cd else 'Stock',
+            'type': inv_type,
         })
 
     summary = {
@@ -75,7 +82,8 @@ def financial_summary(money_manager, date=None):
         'total_principal': total_principal,
         'total_dividends': total_dividends,
         'total_cd_interest': total_cd_interest,
-        'total_income_taxable': total_dividends + total_cd_interest,
+        'total_savings_interest': total_savings_interest,
+        'total_income_taxable': total_dividends + total_cd_interest + total_savings_interest,
         'total_unrealized_gains': total_unrealized_gains,
         'total_portfolio_value': state['total_value'],
         'cash': state['cash'],
@@ -113,6 +121,7 @@ def format_summary(summary):
     lines.append('--- Income (Taxable) ---')
     lines.append(f'Stock Dividends:           ${summary["total_dividends"]:>12,.2f}')
     lines.append(f'CD Interest:               ${summary["total_cd_interest"]:>12,.2f}')
+    lines.append(f'Savings Interest:          ${summary["total_savings_interest"]:>12,.2f}')
     lines.append(f'Total Taxable Income:      ${summary["total_income_taxable"]:>12,.2f}')
     lines.append('')
 
@@ -170,6 +179,7 @@ def compare_strategies(strategy_configs, date=None):
             'Unrealized Gains': s['total_unrealized_gains'],
             'Dividends': s['total_dividends'],
             'CD Interest': s['total_cd_interest'],
+            'Savings Interest': s['total_savings_interest'],
             'Cash': s['cash'],
         })
 
@@ -180,7 +190,8 @@ def compare_strategies(strategy_configs, date=None):
         baseline = comparison_table.iloc[0]
         for i in range(1, len(comparison_table)):
             for col in ['Total Value', 'Principal', 'Unrealized Gains',
-                        'Dividends', 'CD Interest', 'Cash']:
+                        'Dividends', 'CD Interest', 'Savings Interest',
+                        'Cash']:
                 diff = comparison_table.iloc[i][col] - baseline[col]
                 comparison_table.at[comparison_table.index[i],
                                      f'{col} (vs {results[0]["name"]})'] = diff
