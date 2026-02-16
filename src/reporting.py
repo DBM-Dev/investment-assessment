@@ -54,7 +54,7 @@ def financial_summary(money_manager, date=None):
         else:
             total_dividends += dividends
 
-        total_principal += invested
+        total_principal += net_invested
         total_unrealized_gains += unrealized_gain
 
         holdings_detail.append({
