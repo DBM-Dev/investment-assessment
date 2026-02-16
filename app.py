@@ -732,6 +732,147 @@ def page_demo():
         "application in action without needing an API key."
     )
 
+    # ---- Application Overview ----
+    with st.expander("Application Overview — How to Use This Tool", expanded=True):
+        st.markdown("""
+This application simulates historical investment strategies so you can compare
+how different allocations would have performed over time.  Below is a
+step-by-step walkthrough of the intended workflow.
+
+---
+
+**Step 1 — Fetch Stock Data** *(Fetch Stock Data page)*
+
+Start by loading historical price data for the securities you want to analyse.
+You can either download weekly adjusted prices directly from the
+[Alpha Vantage](https://www.alphavantage.co) API using a free API key, or
+upload your own CSV files that follow the Alpha Vantage format.  The
+application ships with a curated list of over 100 Vanguard ETFs you can pick
+from, or you can enter any custom ticker symbol.  Each downloaded ticker
+becomes an **Investment** object stored in your session for use in later steps.
+
+> *Shortcut:* Press **Run Demo** below to skip this step and load synthetic
+> sample data for VMFXX (money market), VTI (stock index), and VNQ (REIT
+> index) covering a two-year period.
+
+---
+
+**Step 2 — Create Investments** *(Create Investments page)*
+
+If you need investments that are not available through the API — such as
+certificates of deposit (CDs) or a money market fund — you can create them
+manually on this page.  Three tabs are provided:
+
+- **Stock Investment** — Enter price rows by hand (useful for private or
+  illiquid assets).
+- **CD Investment** — Define a certificate of deposit with a fixed interest
+  rate, principal, and maturity date.
+- **Money Market** — Create a money market fund (e.g., VMFXX) with a fixed
+  $1.00 share price used as the cash holding account.
+
+---
+
+**Step 3 — Investment Schedule** *(Investment Schedule page)*
+
+Define how and when money flows into your portfolio.  Configure a recurring
+deposit schedule by selecting a start date, end date, frequency (weekly,
+bi-weekly, monthly, or quarterly), and deposit amount.  Deposits land in your
+designated money market fund first.  You also choose an **auto-buy strategy**
+that determines how deposited cash is used to purchase other holdings:
+
+- **Basic (Proportional)** — Each deposit is split among target tickers
+  according to fixed percentage weights (e.g., 70 % VTI / 30 % VNQ).
+- **Balanced** — Purchases are adjusted to bring the portfolio back toward
+  target allocation weights, accounting for current holdings.
+
+---
+
+**Step 4 — Portfolio Management** *(Portfolio Management page)*
+
+Assemble everything into a portfolio.  Select a money market ticker, choose
+which investments to include, and attach one or more schedules.  Then execute
+the schedule to simulate all deposits and automatic buy operations across the
+full date range.  This page also supports manual one-off transactions:
+
+- **Transfer Cash** — Deposit external funds into the money market account.
+- **Buy Ticket** — Purchase shares of a specific ticker using money market
+  cash.
+- **Sell Ticket** — Liquidate a position and return proceeds to the money
+  market.
+
+After execution you can inspect the portfolio state at any date to see
+holdings, cash balance, and accumulated dividends.
+
+---
+
+**Step 5 — Financial Reports** *(Financial Reports page)*
+
+Generate detailed financial summaries for your portfolios.  Two views are
+available:
+
+- **Single Summary** — Shows total portfolio value, principal invested,
+  unrealized gains or losses, taxable income (dividends and interest), and a
+  per-holding breakdown for a chosen date.  Results can be exported as CSV,
+  TXT, or JSON.
+- **Strategy Comparison** — Select two or more portfolios and compare them
+  side-by-side.  The comparison highlights differences in total value, gains,
+  and income relative to a baseline strategy.
+
+---
+
+**Step 6 — Financial Impact Graph** *(Financial Impact Graph page)*
+
+Visualize portfolio performance with an interactive Plotly chart.  Three lines
+are plotted for each selected portfolio:
+
+- **Total Portfolio Value** (solid line)
+- **Principal Invested** (dashed line)
+- **Unrealized Gain / Loss** (dotted line)
+
+You can overlay multiple portfolios on the same chart, hover over data points
+for exact values, and zoom or pan to inspect specific time periods.  A summary
+table with the latest metrics is shown below the chart.
+
+---
+
+**Step 7 — Strategy Wizard** *(Strategy Wizard page)*
+
+A streamlined, all-in-one page for comparing up to four strategies without
+manually building each portfolio.  Configure shared parameters (money market
+ticker, date range, deposit amount and frequency) once, then define each
+strategy's ticker allocation in separate tabs.  Choose from built-in templates
+(e.g., "Three-Fund Portfolio", "S&P 500 Focus", "Dividend Focus") or create
+a custom allocation.  All strategies are executed and compared automatically.
+
+---
+
+**Step 8 — Parameter Sweep** *(Parameter Sweep page)*
+
+Run sensitivity analysis to understand how a single variable affects
+outcomes.  Two sweep types are available:
+
+- **Deposit Amount** — Test a range of monthly deposit amounts (e.g., $500
+  to $2,000) while keeping allocation fixed, to see how contribution size
+  influences total returns.
+- **Allocation Weight** — Vary the weight of one ticker from 0 % to 100 %
+  (with a complementary ticker receiving the remainder) to find the
+  allocation that would have maximized returns or minimized risk.
+
+Results are displayed as a chart and comparison table showing how each
+parameter value performed.
+
+---
+
+**Getting Started**
+
+The fastest way to explore the application is to click **Run Demo** below.
+This generates two years of synthetic market data and creates two sample
+portfolios — a 70/30 VTI/VNQ split and a 100 % VTI allocation — so you can
+immediately visit the **Financial Reports** and **Financial Impact Graph**
+pages to see results.  When you are ready to work with real data, head to the
+**Fetch Stock Data** page and enter your Alpha Vantage API key.
+""")
+
     if st.button("Run Demo", key="btn_demo"):
         with st.spinner("Building demo portfolio..."):
             np.random.seed(42)
