@@ -879,7 +879,7 @@ head to the **Fetch Stock Data** page and enter your Alpha Vantage API key.
             np.random.seed(42)
 
             # Weekly dates from Jan 2022 to Feb 2026
-            mm_dates = pd.date_range(start="2022-01-03", end="2026-02-02", freq="W-MON")
+            mm_dates = pd.date_range(start="2021-12-27", end="2026-02-02", freq="W-MON")
             weeks = len(mm_dates)
 
             # Money market
