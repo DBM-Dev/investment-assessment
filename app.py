@@ -24,7 +24,7 @@ import tempfile
 import time
 import copy
 
-from src.investment import Investment, CDInvestment
+from src.investment import Investment, CDInvestment, SavingsAccount
 from src.money_manager import MoneyManager
 from src.schedule import Schedule
 from src.reporting import financial_summary, format_summary, compare_strategies, format_comparison
@@ -866,20 +866,23 @@ parameter value performed.
 **Getting Started**
 
 The fastest way to explore the application is to click **Run Demo** below.
-This generates two years of synthetic market data and creates two sample
-portfolios — a 70/30 VTI/VNQ split and a 100 % VTI allocation — so you can
-immediately visit the **Financial Reports** and **Financial Impact Graph**
-pages to see results.  When you are ready to work with real data, head to the
-**Fetch Stock Data** page and enter your Alpha Vantage API key.
+This generates synthetic market data from January 2022 to February 2026 and
+creates two sample portfolios — a 100 % VTI stock allocation and a high-yield
+savings account (HYSA) earning 4 % APY — each investing $1,500 per month, so
+you can immediately visit the **Financial Reports** and **Financial Impact
+Graph** pages to compare results.  When you are ready to work with real data,
+head to the **Fetch Stock Data** page and enter your Alpha Vantage API key.
 """)
 
     if st.button("Run Demo", key="btn_demo"):
         with st.spinner("Building demo portfolio..."):
             np.random.seed(42)
-            weeks = 104  # 2 years
+
+            # Weekly dates from Jan 2022 to Feb 2026
+            mm_dates = pd.date_range(start="2022-01-03", end="2026-02-02", freq="W-MON")
+            weeks = len(mm_dates)
 
             # Money market
-            mm_dates = pd.date_range(start="2022-01-03", periods=weeks, freq="W-MON")
             mm_ph = pd.DataFrame({
                 "date": mm_dates, "ticker_price": 1.0, "per_stock_return": 0.0,
             })
@@ -894,51 +897,47 @@ pages to see results.  When you are ready to work with real data, head to the
             })
             vti = Investment("VTI", price_history=vti_ph, divisible=True)
 
-            # VNQ-like REIT
-            vnq_prices = 90.0 * np.cumprod(1 + np.random.normal(0.001, 0.03, weeks))
-            vnq_divs = np.zeros(weeks)
-            vnq_divs[12::13] = 0.55
-            vnq_ph = pd.DataFrame({
-                "date": mm_dates, "ticker_price": vnq_prices, "per_stock_return": vnq_divs,
-            })
-            vnq = Investment("VNQ", price_history=vnq_ph, divisible=True)
+            # High Yield Savings Account with 4% APY
+            hysa = SavingsAccount(
+                "HYSA", apy=0.04, start_date="2022-01-03",
+                end_date="2026-02-02", payout_freq="W-MON",
+            )
 
             # Store investments
             st.session_state["investments"]["VMFXX"] = vmfxx
             st.session_state["investments"]["VTI"] = vti
-            st.session_state["investments"]["VNQ"] = vnq
+            st.session_state["investments"]["HYSA"] = hysa
 
-            # Strategy 1: 70/30 VTI/VNQ
+            # Strategy 1: 100% VTI
             sched1 = Schedule(money_market="VMFXX")
             sched1.automate_investment_schedule(
-                start="2022-01-03", stop="2023-12-25", freq="MS", amount=1000.0,
+                start="2022-01-01", stop="2026-02-01", freq="MS", amount=1500.0,
             )
-            st.session_state["schedules"]["demo_70_30"] = sched1
+            st.session_state["schedules"]["demo_vti"] = sched1
 
             mm1 = MoneyManager(schedule=sched1, money_market_ticker="VMFXX")
             mm1.add_investment(Investment("VMFXX", price_history=mm_ph.copy(), divisible=True))
             mm1.add_investment(Investment("VTI", price_history=vti_ph.copy(), divisible=True))
-            mm1.add_investment(Investment("VNQ", price_history=vnq_ph.copy(), divisible=True))
             mm1.run_schedule()
+            _simulate_proportional_buys(mm1, {"VTI": 1.0})
+            st.session_state["managers"]["Demo VTI"] = mm1
 
-            # After deposits, simulate proportional buys by manually executing
-            # buy operations for each deposit date
-            _simulate_proportional_buys(mm1, {"VTI": 0.7, "VNQ": 0.3})
-            st.session_state["managers"]["Demo 70/30"] = mm1
-
-            # Strategy 2: 100% VTI
+            # Strategy 2: 100% HYSA (4% APY)
             sched2 = Schedule(money_market="VMFXX")
             sched2.automate_investment_schedule(
-                start="2022-01-03", stop="2023-12-25", freq="MS", amount=1000.0,
+                start="2022-01-01", stop="2026-02-01", freq="MS", amount=1500.0,
             )
-            st.session_state["schedules"]["demo_100_vti"] = sched2
+            st.session_state["schedules"]["demo_hysa"] = sched2
 
             mm2 = MoneyManager(schedule=sched2, money_market_ticker="VMFXX")
             mm2.add_investment(Investment("VMFXX", price_history=mm_ph.copy(), divisible=True))
-            mm2.add_investment(Investment("VTI", price_history=vti_ph.copy(), divisible=True))
+            mm2.add_investment(SavingsAccount(
+                "HYSA", apy=0.04, start_date="2022-01-03",
+                end_date="2026-02-02", payout_freq="W-MON",
+            ))
             mm2.run_schedule()
-            _simulate_proportional_buys(mm2, {"VTI": 1.0})
-            st.session_state["managers"]["Demo 100% VTI"] = mm2
+            _simulate_proportional_buys(mm2, {"HYSA": 1.0})
+            st.session_state["managers"]["Demo HYSA"] = mm2
 
         st.success("Demo portfolios created! Use the sidebar to explore Reports and Financial Graph pages.")
 
